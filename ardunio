@@ -1,0 +1,144 @@
+#include<WiFi.h>
+#include<esp_camera.h>
+#include<WiFiClient.h>
+
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(115200);
+
+  WiFi.begin("FPT Telecom 2.4G" , "12345678");
+
+  while (WiFi.status() != WL_CONNECTED){
+    Serial.println("CONNECTING ...");
+    delay(2000);
+  }
+
+  Serial.println("CONNECTED");
+  Serial.println(WiFi.localIP());
+
+  camera_config_t config;
+
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = Y2_GPIO_NUM;
+  config.pin_d1 = Y3_GPIO_NUM;
+  config.pin_d2 = Y4_GPIO_NUM;
+  config.pin_d3 = Y5_GPIO_NUM;
+  config.pin_d4 = Y6_GPIO_NUM;
+  config.pin_d5 = Y7_GPIO_NUM;
+  config.pin_d6 = Y8_GPIO_NUM;
+  config.pin_d7 = Y9_GPIO_NUM;
+  config.pin_xclk = XCLK_GPIO_NUM;
+  config.pin_pclk = PCLK_GPIO_NUM;
+  config.pin_vsync = VSYNC_GPIO_NUM;
+  config.pin_href = HREF_GPIO_NUM;
+  config.pin_sccb_sda = SIOD_GPIO_NUM;
+  config.pin_sccb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn = PWDN_GPIO_NUM;
+  config.pin_reset = RESET_GPIO_NUM;
+  config.xclk_freq_hz = 20000000;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.frame_size = FRAMESIZE_QVGA;
+  config.jpeg_quality = 12;
+  config.fb_count = 1;
+
+  esp_err_t err = esp_camera_init(&config);
+
+  if ( err != ESP_OK){
+    Serial.println("CAMERA FAIL");
+    return;
+  }
+
+}
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  capture();
+  delay(3000);
+}
+
+void capture(){
+  camera_fb_t *fb = esp_camera_fb_get();
+
+  if (!fb){
+    Serial.println("CAPTURE FAIL");
+    return;
+  }
+
+  WiFiClient client;
+
+  if (!client.connect("192.168.1.222" ,5000)){
+    Serial.println("Flask Fail");
+    esp_camera_fb_return(fb);
+    return;
+  }
+
+  Serial.println("Flask Success");
+
+  client.printf(
+    "POST /upload HTTP/1.1\r\n"
+    "HOST: 192.168.1.222\r\n"
+    "Content-Type: image/jpeg\r\n"
+    "Content-Length: %u\r\n"
+    "\r\n",
+    fb->len
+  );
+
+  size_t sent = 0;
+  const size_t chunk = 1024;
+  while (sent < fb->len) {
+    size_t tosend = min(chunk, fb->len - sent);
+    size_t written = client.write(fb->buf + sent, tosend);
+    if (written == 0) {
+      Serial.println("write failed, abort");
+      break;
+    }
+    sent += written;   // ✅ cộng đúng số byte thực gửi
+  }
+   
+  esp_camera_fb_return(fb);
+  Serial.printf("Sent %u bytes\n", sent);
+
+  String response = "";
+  long timeout = millis() + 5000;
+  while (client.connected() && millis() < timeout) {
+    while (client.available()) {
+      char c = client.read();
+      response += c;
+    }
+  }
+  client.stop();
+
+  Serial.println("---- RESPONSE ----");
+  Serial.println(response);
+
+  // Header và body cách nhau bởi 1 dòng trống (\r\n\r\n)
+  String body = "";
+  int idx = response.indexOf("\r\n\r\n");
+  if (idx != -1) {
+    body = response.substring(idx + 4); // lấy phần chuỗi sau dấu \r\n\r\n (4 ký tự), chính là phần body.
+    body.trim();   // xóa \r \n thừa
+  }
+
+  Serial.print("Body nhan duoc: [");
+  Serial.print(body);
+  Serial.println("]");
+  Serial.println("Done!");
+}
